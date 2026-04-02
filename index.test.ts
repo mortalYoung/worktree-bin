@@ -1,5 +1,11 @@
 import { test, expect } from "bun:test";
-import { sanitizeBranchName, buildTargetPath, generateCodename } from "./index";
+import {
+  sanitizeBranchName,
+  buildTargetPath,
+  generateCodename,
+  parseWorktreeList,
+  formatWorktreeList,
+} from "./index";
 
 test("sanitizeBranchName: no slashes → unchanged", () => {
   expect(sanitizeBranchName("main")).toBe("main");
@@ -33,4 +39,64 @@ test("generateCodename: contains exactly one dash separating two non-empty words
   expect(parts.length).toBe(2);
   expect(parts[0].length).toBeGreaterThan(0);
   expect(parts[1].length).toBeGreaterThan(0);
+});
+
+test("parseWorktreeList: extracts branch names and code names", () => {
+  const output = `
+worktree /Users/user/my-project
+HEAD abc123
+branch refs/heads/main
+
+worktree /Users/user/my-project.worktrees/feature-foo
+HEAD def456
+branch refs/heads/feature/foo
+
+worktree /Users/user/my-project.worktrees/strip-away
+HEAD ghi789
+branch refs/heads/strip-away
+`;
+
+  expect(parseWorktreeList(output, "/Users/user/my-project", "my-project")).toEqual([
+    {
+      path: "/Users/user/my-project",
+      branchName: "main",
+      codeName: "root",
+      isCurrent: true,
+    },
+    {
+      path: "/Users/user/my-project.worktrees/feature-foo",
+      branchName: "feature/foo",
+      codeName: "feature-foo",
+      isCurrent: false,
+    },
+    {
+      path: "/Users/user/my-project.worktrees/strip-away",
+      branchName: "strip-away",
+      codeName: "strip-away",
+      isCurrent: false,
+    },
+  ]);
+});
+
+test("formatWorktreeList: prints aligned table rows", () => {
+  expect(
+    formatWorktreeList([
+      {
+        path: "/Users/user/my-project",
+        branchName: "main",
+        codeName: "root",
+        isCurrent: true,
+      },
+      {
+        path: "/Users/user/my-project.worktrees/feature-foo",
+        branchName: "feature/foo",
+        codeName: "feature-foo",
+        isCurrent: false,
+      },
+    ])
+  ).toEqual([
+    "CURRENT  BRANCH       CODE-NAME  ",
+    "*        main         root       ",
+    "         feature/foo  feature-foo",
+  ]);
 });

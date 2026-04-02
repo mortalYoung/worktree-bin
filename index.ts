@@ -7,6 +7,13 @@ import { generate } from "random-words";
 // Pure helpers (exported for testing)
 // ---------------------------------------------------------------------------
 
+export type WorktreeEntry = {
+  path: string;
+  branchName: string;
+  codeName: string;
+  isCurrent: boolean;
+};
+
 export function sanitizeBranchName(branch: string): string {
   return branch.replaceAll("/", "-");
 }
@@ -24,6 +31,57 @@ export function generateCodename(): string {
   return generate({ exactly: 2, join: "-" }) as string;
 }
 
+export function parseWorktreeList(
+  porcelainOutput: string,
+  gitRoot: string,
+  repoName: string
+): WorktreeEntry[] {
+  const worktreeRoot = path.join(path.dirname(gitRoot), `${repoName}.worktrees`);
+  const blocks = porcelainOutput
+    .trim()
+    .split("\n\n")
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  return blocks.map((block) => {
+    const lines = block.split("\n");
+    const worktreePath = lines.find((line) => line.startsWith("worktree "))?.slice(9) ?? "";
+    const branchRef = lines.find((line) => line.startsWith("branch "))?.slice(7) ?? "";
+    const branchName = branchRef.startsWith("refs/heads/")
+      ? branchRef.slice("refs/heads/".length)
+      : "(detached)";
+    const isCurrent = worktreePath === gitRoot;
+    const codeName = worktreePath.startsWith(`${worktreeRoot}${path.sep}`)
+      ? path.basename(worktreePath)
+      : "root";
+
+    return {
+      path: worktreePath,
+      branchName,
+      codeName,
+      isCurrent,
+    };
+  });
+}
+
+export function formatWorktreeList(entries: WorktreeEntry[]): string[] {
+  const branchWidth = Math.max("BRANCH".length, ...entries.map((entry) => entry.branchName.length));
+  const codeWidth = Math.max("CODE-NAME".length, ...entries.map((entry) => entry.codeName.length));
+
+  const lines = [
+    `${"CURRENT".padEnd(7)}  ${"BRANCH".padEnd(branchWidth)}  ${"CODE-NAME".padEnd(codeWidth)}`,
+  ];
+
+  for (const entry of entries) {
+    lines.push(
+      `${entry.isCurrent ? "*" : " "}`.padEnd(7) +
+        `  ${entry.branchName.padEnd(branchWidth)}  ${entry.codeName.padEnd(codeWidth)}`
+    );
+  }
+
+  return lines;
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -31,6 +89,12 @@ export function generateCodename(): string {
 async function getGitRoot(): Promise<string> {
   const result = await $`git rev-parse --show-toplevel`.text();
   return result.trim();
+}
+
+async function getWorktreeEntries(gitRoot: string): Promise<WorktreeEntry[]> {
+  const repoName = path.basename(gitRoot);
+  const porcelain = await $`git worktree list --porcelain`.text();
+  return parseWorktreeList(porcelain, gitRoot, repoName);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +165,8 @@ async function commandSwitch(name: string | undefined): Promise<void> {
   }
 
   const repoName = path.basename(gitRoot);
-  const targetPath = buildTargetPath(gitRoot, repoName, name);
+  const targetPath = name === "root" ? gitRoot : buildTargetPath(gitRoot, repoName, name);
+  const currentPath = process.cwd();
 
   try {
     await $`test -d ${targetPath}`.quiet();
@@ -110,10 +175,33 @@ async function commandSwitch(name: string | undefined): Promise<void> {
     process.exit(1);
   }
 
+  if (path.resolve(currentPath) === path.resolve(targetPath)) {
+    console.log(`▶ Already in worktree: ${name}`);
+    return;
+  }
+
   process.chdir(targetPath);
   Bun.spawnSync([process.env.SHELL ?? "zsh"], {
     stdio: ["inherit", "inherit", "inherit"],
   });
+}
+
+async function commandList(): Promise<void> {
+  let gitRoot: string;
+  try {
+    gitRoot = await getGitRoot();
+  } catch {
+    console.error("Error: not a git repository");
+    process.exit(1);
+  }
+
+  const entries = await getWorktreeEntries(gitRoot);
+
+  console.log("▶ Available worktrees");
+  for (const line of formatWorktreeList(entries)) {
+    console.log(line);
+  }
+  console.log("\n  worktree checkout <code-name>");
 }
 
 // ---------------------------------------------------------------------------
@@ -133,10 +221,14 @@ async function main(): Promise<void> {
     case "checkout":
       await commandSwitch(arg1);
       break;
+    case "list":
+      await commandList();
+      break;
     default:
       console.error("Usage: worktree <command>");
       console.error("Commands:");
       console.error("  add [branchName]   create a new worktree (generates codename if omitted)");
+      console.error("  list               list worktrees with branch names and code names");
       console.error("  switch <name>      open a subshell in the worktree directory");
       console.error("  checkout <name>    alias for switch");
       process.exit(1);

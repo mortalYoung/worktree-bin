@@ -40,7 +40,9 @@ worktree add
 
 Opens a new subshell in the worktree directory. Exit the subshell (`exit` or `Ctrl-D`) to return to the original directory.
 
-`<name>` is the sanitized directory name shown at the end of `worktree add`.
+`<name>` is the sanitized directory name shown at the end of `worktree add`. Use `root` to switch back to the primary repository worktree.
+
+If the target worktree is already the current directory, no subshell is opened.
 
 ```bash
 worktree switch feature-my-feature
@@ -49,6 +51,25 @@ worktree switch feature-my-feature
 ```
 
 `checkout` is an alias for `switch`.
+
+### `worktree list`
+
+Prints all worktrees for the current repository, including the git branch name and the code-name you can pass to `worktree checkout`.
+
+The primary repository worktree is included and marked as current. Its checkout code-name is always `root`.
+
+**Example:**
+
+```bash
+worktree list
+# ▶ Available worktrees
+# CURRENT  BRANCH             CODE-NAME
+# *        main               root
+#          feature/my-branch  feature-my-branch
+#          strip-away         strip-away
+#
+#   worktree checkout <code-name>
+```
 
 ## Development
 
