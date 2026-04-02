@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { sanitizeBranchName, buildTargetPath } from "./index";
+import { sanitizeBranchName, buildTargetPath, generateCodename } from "./index";
 
 test("sanitizeBranchName: no slashes → unchanged", () => {
   expect(sanitizeBranchName("main")).toBe("main");
@@ -21,4 +21,16 @@ test("buildTargetPath: normal branch", () => {
 test("buildTargetPath: branch with slash → sanitized dir name", () => {
   expect(buildTargetPath("/Users/user/my-project", "my-project", "feature/foo"))
     .toBe("/Users/user/my-project.worktrees/feature-foo");
+});
+
+test("generateCodename: returns a string", () => {
+  expect(typeof generateCodename()).toBe("string");
+});
+
+test("generateCodename: contains exactly one dash separating two non-empty words", () => {
+  const name = generateCodename();
+  const parts = name.split("-");
+  expect(parts.length).toBe(2);
+  expect(parts[0].length).toBeGreaterThan(0);
+  expect(parts[1].length).toBeGreaterThan(0);
 });

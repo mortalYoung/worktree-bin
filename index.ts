@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import path from "node:path";
 import { $ } from "bun";
+import { generate } from "random-words";
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for testing)
@@ -19,13 +20,18 @@ export function buildTargetPath(
   return path.join(path.dirname(gitRoot), `${repoName}.worktrees`, safeName);
 }
 
+export function generateCodename(): string {
+  return generate({ exactly: 2, join: "-" }) as string;
+}
+
 // ---------------------------------------------------------------------------
 // Main CLI logic
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const [command, branchName] = args;
+  const [command] = args;
+  let branchName = args[1];
 
   // Dispatch subcommands
   if (command !== "add") {
@@ -36,8 +42,8 @@ async function main(): Promise<void> {
   }
 
   if (!branchName) {
-    console.error("Usage: worktree add <branchName>");
-    process.exit(1);
+    branchName = generateCodename();
+    console.error(`No branch name provided. Using generated codename: ${branchName}`);
   }
 
   // Resolve git root
