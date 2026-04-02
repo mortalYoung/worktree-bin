@@ -5,6 +5,7 @@ A CLI tool for creating git worktrees with an opinionated directory convention.
 ## Install
 
 ```bash
+bun install
 bun link
 ```
 
@@ -69,6 +70,35 @@ worktree list
 #          strip-away         strip-away
 #
 #   worktree checkout <code-name>
+```
+
+### `worktree completion [shell]`
+
+Shows setup instructions for shell completion for `bash` or `zsh`.
+
+- `shell` is optional. If omitted, the command detects the shell from `$SHELL`.
+- The generated script includes dynamic completion for `worktree switch <name>` and `worktree checkout <name>`, using the current repository's worktree code names such as `root` or `feature-my-feature`.
+- By default, the command prints human-friendly setup steps.
+- Use `--script` if you want the raw completion script itself.
+- This command does not modify your shell rc files automatically.
+
+**Examples:**
+
+```bash
+# show setup instructions
+worktree completion zsh
+worktree completion bash
+
+# one-off in the current shell
+source <(worktree completion zsh --script)
+source <(worktree completion bash --script)
+
+# persist for future shells
+echo 'source <(worktree completion zsh --script)' >> ~/.zshrc
+echo 'source <(worktree completion bash --script)' >> ~/.bashrc
+
+# print the raw completion script
+worktree completion zsh --script
 ```
 
 ## Development

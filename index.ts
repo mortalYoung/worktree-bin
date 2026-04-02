@@ -2,6 +2,71 @@
 import path from "node:path";
 import { $ } from "bun";
 import { generate } from "random-words";
+import yargs from "yargs";
+import { hideBin } from "yargs/helpers";
+import type { ArgumentsCamelCase, Argv } from "yargs";
+
+const CLI_NAME = "worktree";
+const INTERNAL_COMPLETION_COMMAND = "__completion";
+
+const BASH_COMPLETION_TEMPLATE = `###-begin-{{app_name}}-completions-###
+#
+# yargs command completion script
+#
+# Installation: {{app_path}} {{completion_command}} >> ~/.bashrc
+#    or {{app_path}} {{completion_command}} >> ~/.bash_profile on OSX.
+#
+_{{app_name}}_yargs_completions()
+{
+    local cur_word args type_list
+
+    cur_word="\${COMP_WORDS[COMP_CWORD]}"
+    args=("\${COMP_WORDS[@]}")
+
+    # ask yargs to generate completions.
+    # see https://stackoverflow.com/a/40944195/7080036 for the spaces-handling awk
+    mapfile -t type_list < <({{app_path}} --get-yargs-completions "\${args[@]}")
+    mapfile -t COMPREPLY < <(compgen -W "$( printf '%q ' "\${type_list[@]}" )" -- "\${cur_word}" |
+        awk '/ / { print "\\""$0"\\"" } /^[^ ]+$/ { print $0 }')
+
+    # if no match was found, fall back to filename completion
+    if [ \${#COMPREPLY[@]} -eq 0 ]; then
+      COMPREPLY=()
+    fi
+
+    return 0
+}
+complete -o bashdefault -o default -F _{{app_name}}_yargs_completions {{app_name}}
+###-end-{{app_name}}-completions-###
+`;
+
+const ZSH_COMPLETION_TEMPLATE = `#compdef {{app_name}}
+###-begin-{{app_name}}-completions-###
+#
+# yargs command completion script
+#
+# Installation: {{app_path}} {{completion_command}} >> ~/.zshrc
+#    or {{app_path}} {{completion_command}} >> ~/.zprofile on OSX.
+#
+_{{app_name}}_yargs_completions()
+{
+  local reply
+  local si=$IFS
+  IFS=$'\n' reply=($(COMP_CWORD="$((CURRENT-1))" COMP_LINE="$BUFFER" COMP_POINT="$CURSOR" {{app_path}} --get-yargs-completions "\${words[@]}"))
+  IFS=$si
+  if [[ \${#reply} -gt 0 ]]; then
+    _describe 'values' reply
+  else
+    _default
+  fi
+}
+if [[ "'\${zsh_eval_context[-1]}" == "loadautofunc" ]]; then
+  _{{app_name}}_yargs_completions "$@"
+else
+  compdef _{{app_name}}_yargs_completions {{app_name}}
+fi
+###-end-{{app_name}}-completions-###
+`;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for testing)
@@ -13,6 +78,8 @@ export type WorktreeEntry = {
   codeName: string;
   isCurrent: boolean;
 };
+
+export type SupportedShell = "bash" | "zsh";
 
 export function sanitizeBranchName(branch: string): string {
   return branch.replaceAll("/", "-");
@@ -82,6 +149,54 @@ export function formatWorktreeList(entries: WorktreeEntry[]): string[] {
   return lines;
 }
 
+export function detectShell(shell?: string): SupportedShell {
+  return shell?.includes("zsh") ? "zsh" : "bash";
+}
+
+export function renderCompletionScript(
+  shell: SupportedShell,
+  appPath = CLI_NAME,
+  completionCommand = "completion"
+): string {
+  const template = shell === "zsh" ? ZSH_COMPLETION_TEMPLATE : BASH_COMPLETION_TEMPLATE;
+
+  return template
+    .replaceAll("{{app_name}}", CLI_NAME)
+    .replaceAll("{{app_path}}", appPath)
+    .replaceAll("{{completion_command}}", completionCommand);
+}
+
+export function renderCompletionInstructions(
+  shell: SupportedShell,
+  appPath = CLI_NAME
+): string[] {
+  const rcFile = shell === "zsh" ? "~/.zshrc" : "~/.bashrc";
+
+  return [
+    `▶ Shell completion for ${shell}`,
+    "",
+    "Run this once in your current shell:",
+    `  source <(${appPath} completion ${shell} --script)`,
+    "",
+    "Persist it for future shells:",
+    `  echo 'source <(${appPath} completion ${shell} --script)' >> ${rcFile}`,
+    "",
+    "To print the raw completion script:",
+    `  ${appPath} completion ${shell} --script`,
+  ];
+}
+
+export function shouldCompleteWorktreeNames(argv: ArgumentsCamelCase): boolean {
+  const tokens = argv._.map((token) => String(token));
+  const commandIndex = tokens.findIndex((token) => token === "switch" || token === "checkout");
+
+  if (commandIndex === -1) {
+    return false;
+  }
+
+  return tokens.length - commandIndex - 1 <= 1;
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -97,11 +212,27 @@ async function getWorktreeEntries(gitRoot: string): Promise<WorktreeEntry[]> {
   return parseWorktreeList(porcelain, gitRoot, repoName);
 }
 
+export async function getWorktreeNameCompletions(current = ""): Promise<string[]> {
+  let gitRoot: string;
+
+  try {
+    gitRoot = await getGitRoot();
+  } catch {
+    return [];
+  }
+
+  const entries = await getWorktreeEntries(gitRoot);
+  return entries
+    .map((entry) => entry.codeName)
+    .filter((name, index, names) => names.indexOf(name) === index)
+    .filter((name) => name.startsWith(current));
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
-async function commandAdd(branchName: string | undefined): Promise<void> {
+export async function commandAdd(branchName: string | undefined): Promise<void> {
   let name = branchName;
 
   if (!name) {
@@ -137,25 +268,19 @@ async function commandAdd(branchName: string | undefined): Promise<void> {
     await $`git worktree add -b ${name} ${targetPath}`;
   }
 
-  // Copy .vscode if present (silently skip if not)
   const vscodeSource = path.join(gitRoot, ".vscode");
   try {
     await $`test -d ${vscodeSource}`.quiet();
     await $`cp -r ${vscodeSource} ${targetPath}/`;
   } catch {
-    // .vscode does not exist — skip silently
+    // .vscode does not exist, skip silently.
   }
 
-  console.log(`✓ Worktree ready`);
+  console.log("✓ Worktree ready");
   console.log(`\n  worktree switch ${safeName}\n`);
 }
 
-async function commandSwitch(name: string | undefined): Promise<void> {
-  if (!name) {
-    console.error("Usage: worktree switch <name>");
-    process.exit(1);
-  }
-
+export async function commandSwitch(name: string): Promise<void> {
   let gitRoot: string;
   try {
     gitRoot = await getGitRoot();
@@ -186,7 +311,7 @@ async function commandSwitch(name: string | undefined): Promise<void> {
   });
 }
 
-async function commandList(): Promise<void> {
+export async function commandList(): Promise<void> {
   let gitRoot: string;
   try {
     gitRoot = await getGitRoot();
@@ -205,36 +330,151 @@ async function commandList(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Main CLI dispatch
+// CLI setup
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const [command] = args;
-  const arg1 = args[1];
+export function buildCli(argv = hideBin(process.argv)): Argv {
+  return yargs(argv)
+    .scriptName(CLI_NAME)
+    .strictCommands()
+    .demandCommand(1)
+    .recommendCommands()
+    .help()
+    .showHelpOnFail(true)
+    .completion(INTERNAL_COMPLETION_COMMAND, false, async (current, parsedArgv, fallback, done) => {
+      if (!shouldCompleteWorktreeNames(parsedArgv)) {
+        fallback((_, completions) => {
+          done(completions ?? []);
+        });
+        return;
+      }
 
-  switch (command) {
-    case "add":
-      await commandAdd(arg1);
-      break;
-    case "switch":
-    case "checkout":
-      await commandSwitch(arg1);
-      break;
-    case "list":
-      await commandList();
-      break;
-    default:
-      console.error("Usage: worktree <command>");
-      console.error("Commands:");
-      console.error("  add [branchName]   create a new worktree (generates codename if omitted)");
-      console.error("  list               list worktrees with branch names and code names");
-      console.error("  switch <name>      open a subshell in the worktree directory");
-      console.error("  checkout <name>    alias for switch");
-      process.exit(1);
+      const [defaultCompletions, worktreeCompletions] = await Promise.all([
+        new Promise<string[]>((resolve) => {
+          fallback((_, completions) => resolve(completions ?? []));
+        }),
+        getWorktreeNameCompletions(current),
+      ]);
+
+      done([...new Set([...defaultCompletions, ...worktreeCompletions])]);
+    })
+    .command(
+      "add [branchName]",
+      "create a new worktree (generates codename if omitted)",
+      (command) =>
+        command.positional("branchName", {
+          type: "string",
+          describe: "Branch name to create or reuse for the worktree",
+        }),
+      async (args) => {
+        await commandAdd(args.branchName as string | undefined);
+      }
+    )
+    .command(
+      "list",
+      "list worktrees with branch names and code names",
+      (command) => command,
+      async () => {
+        await commandList();
+      }
+    )
+    .command({
+      command: "switch <name>",
+      aliases: ["checkout"],
+      describe: "open a subshell in the worktree directory",
+      builder: (command) =>
+        command.positional("name", {
+          type: "string",
+          describe: "Sanitized worktree name or root",
+        }),
+      handler: async (args) => {
+        await commandSwitch(String(args.name));
+      },
+    })
+    .command(
+      "completion [shell]",
+      "show shell completion setup instructions",
+      (command) =>
+        command
+          .positional("shell", {
+            choices: ["bash", "zsh"] as const,
+            describe: "Shell to generate the completion script for",
+            type: "string",
+          })
+          .option("script", {
+            type: "boolean",
+            default: false,
+            describe: "Print the raw completion script instead of setup instructions",
+          }),
+      (args) => {
+        const shell = (args.shell as SupportedShell | undefined) ?? detectShell(process.env.SHELL);
+        const output = args.script
+          ? renderCompletionScript(shell)
+          : renderCompletionInstructions(shell).join("\n");
+
+        console.log(output);
+      }
+    );
+}
+
+export async function getCliCompletions(args: string[]): Promise<string[]> {
+  const completionArgs = [...args];
+  const current = completionArgs.pop() ?? "";
+  const tokens =
+    completionArgs[0] === CLI_NAME || path.basename(completionArgs[0] ?? "") === CLI_NAME
+      ? completionArgs.slice(1)
+      : completionArgs;
+
+  const command = tokens[0];
+  const globalOptions = ["--version", "--help"];
+  const commands = ["add", "list", "switch", "checkout", "completion"];
+  const shellChoices: SupportedShell[] = ["bash", "zsh"];
+
+  if (current.startsWith("-")) {
+    return globalOptions.filter((option) => option.startsWith(current));
+  }
+
+  if (!command) {
+    return [...commands, ...globalOptions].filter((value) => value.startsWith(current));
+  }
+
+  if ((command === "switch" || command === "checkout") && tokens.length <= 1) {
+    const worktreeNames = await getWorktreeNameCompletions(current);
+    return [...globalOptions, ...worktreeNames].filter((value) => value.startsWith(current));
+  }
+
+  if (command === "completion" && tokens.length <= 1) {
+    return [...globalOptions, ...shellChoices].filter((value) => value.startsWith(current));
+  }
+
+  return globalOptions.filter((option) => option.startsWith(current));
+}
+
+async function main(): Promise<void> {
+  try {
+    const args = hideBin(process.argv);
+    const completionFlagIndex = args.indexOf("--get-yargs-completions");
+
+    if (completionFlagIndex !== -1) {
+      const completionArgs = args.slice(completionFlagIndex + 1);
+      const completions = await getCliCompletions(completionArgs);
+
+      for (const completion of completions) {
+        console.log(completion);
+      }
+
+      return;
+    }
+
+    await buildCli(args).parseAsync();
+  } catch (error) {
+    if (error instanceof Error && error.message) {
+      console.error(error.message);
+    }
+    process.exitCode = 1;
   }
 }
 
 if (import.meta.main) {
-  main();
+  await main();
 }

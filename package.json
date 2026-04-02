@@ -13,6 +13,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "random-words": "^2.0.1"
+    "random-words": "^2.0.1",
+    "yargs": "^18.0.0"
   }
 }
