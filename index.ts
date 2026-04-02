@@ -25,54 +25,52 @@ export function generateCodename(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Main CLI logic
+// Shared helpers
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const [command] = args;
-  let branchName = args[1];
+async function getGitRoot(): Promise<string> {
+  const result = await $`git rev-parse --show-toplevel`.text();
+  return result.trim();
+}
 
-  // Dispatch subcommands
-  if (command !== "add") {
-    console.error("Usage: worktree <command>");
-    console.error("Commands:");
-    console.error("  add <branchName>   create a new worktree for the given branch");
-    process.exit(1);
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+async function commandAdd(branchName: string | undefined): Promise<void> {
+  let name = branchName;
+
+  if (!name) {
+    name = generateCodename();
+    console.log(`▶ No branch name provided. Using generated codename: ${name}`);
   }
 
-  if (!branchName) {
-    branchName = generateCodename();
-    console.error(`No branch name provided. Using generated codename: ${branchName}`);
-  }
-
-  // Resolve git root
   let gitRoot: string;
   try {
-    const result = await $`git rev-parse --show-toplevel`.text();
-    gitRoot = result.trim();
+    gitRoot = await getGitRoot();
   } catch {
     console.error("Error: not a git repository");
     process.exit(1);
   }
 
   const repoName = path.basename(gitRoot);
-  const targetPath = buildTargetPath(gitRoot, repoName, branchName);
+  const safeName = sanitizeBranchName(name);
+  const targetPath = buildTargetPath(gitRoot, repoName, name);
 
-  // Check if branch already exists
+  console.log(`▶ Creating worktree: ${safeName}`);
+
   let branchExists = false;
   try {
-    await $`git show-ref --verify refs/heads/${branchName}`.quiet();
+    await $`git show-ref --verify refs/heads/${name}`.quiet();
     branchExists = true;
   } catch {
     branchExists = false;
   }
 
-  // Create worktree
   if (branchExists) {
-    await $`git worktree add ${targetPath} ${branchName}`;
+    await $`git worktree add ${targetPath} ${name}`;
   } else {
-    await $`git worktree add -b ${branchName} ${targetPath}`;
+    await $`git worktree add -b ${name} ${targetPath}`;
   }
 
   // Copy .vscode if present (silently skip if not)
@@ -82,6 +80,66 @@ async function main(): Promise<void> {
     await $`cp -r ${vscodeSource} ${targetPath}/`;
   } catch {
     // .vscode does not exist — skip silently
+  }
+
+  console.log(`✓ Worktree ready`);
+  console.log(`\n  worktree switch ${safeName}\n`);
+}
+
+async function commandSwitch(name: string | undefined): Promise<void> {
+  if (!name) {
+    console.error("Usage: worktree switch <name>");
+    process.exit(1);
+  }
+
+  let gitRoot: string;
+  try {
+    gitRoot = await getGitRoot();
+  } catch {
+    console.error("Error: not a git repository");
+    process.exit(1);
+  }
+
+  const repoName = path.basename(gitRoot);
+  const targetPath = buildTargetPath(gitRoot, repoName, name);
+
+  try {
+    await $`test -d ${targetPath}`.quiet();
+  } catch {
+    console.error(`Error: worktree '${name}' not found`);
+    process.exit(1);
+  }
+
+  process.chdir(targetPath);
+  Bun.spawnSync([process.env.SHELL ?? "zsh"], {
+    stdio: ["inherit", "inherit", "inherit"],
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Main CLI dispatch
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const [command] = args;
+  const arg1 = args[1];
+
+  switch (command) {
+    case "add":
+      await commandAdd(arg1);
+      break;
+    case "switch":
+    case "checkout":
+      await commandSwitch(arg1);
+      break;
+    default:
+      console.error("Usage: worktree <command>");
+      console.error("Commands:");
+      console.error("  add [branchName]   create a new worktree (generates codename if omitted)");
+      console.error("  switch <name>      open a subshell in the worktree directory");
+      console.error("  checkout <name>    alias for switch");
+      process.exit(1);
   }
 }
 
