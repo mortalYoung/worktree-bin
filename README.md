@@ -53,6 +53,20 @@ worktree switch feature-my-feature
 
 `checkout` is an alias for `switch`.
 
+### `worktree remove <name>`
+
+Removes a non-`root` worktree by code-name using `git worktree remove`.
+
+- `root` cannot be removed through this command.
+- If the removed worktree was the last entry inside `../<repo-name>.worktrees/`, that now-empty directory is deleted too.
+
+**Example:**
+
+```bash
+worktree remove feature-my-feature
+# ✓ Removed worktree: feature-my-feature
+```
+
 ### `worktree list`
 
 Prints all worktrees for the current repository, including the git branch name and the code-name you can pass to `worktree checkout`.
@@ -93,7 +107,7 @@ worktree prune
 Shows setup instructions for shell completion for `bash` or `zsh`.
 
 - `shell` is optional. If omitted, the command detects the shell from `$SHELL`.
-- The generated script includes dynamic completion for `worktree switch <name>` and `worktree checkout <name>`, using the current repository's worktree code names such as `root` or `feature-my-feature`.
+- The generated script includes dynamic completion for `worktree switch <name>`, `worktree checkout <name>`, and `worktree remove <name>`, using the current repository's worktree code names such as `root` or `feature-my-feature`.
 - By default, the command prints human-friendly setup steps.
 - Use `--script` if you want the raw completion script itself.
 - This command does not modify your shell rc files automatically.

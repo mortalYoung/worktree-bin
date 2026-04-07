@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import path from "node:path";
+import { readdirSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { $ } from "bun";
 import { generate } from "random-words";
@@ -187,7 +188,9 @@ export function renderCompletionInstructions(
 
 export function shouldCompleteWorktreeNames(argv: ArgumentsCamelCase): boolean {
   const tokens = argv._.map((token) => String(token));
-  const commandIndex = tokens.findIndex((token) => token === "switch" || token === "checkout");
+  const commandIndex = tokens.findIndex(
+    (token) => token === "switch" || token === "checkout" || token === "remove"
+  );
 
   if (commandIndex === -1) {
     return false;
@@ -324,6 +327,34 @@ export async function commandSwitch(name: string): Promise<void> {
   });
 }
 
+function getManagedWorktreeRoot(gitRoot: string): string {
+  return path.join(path.dirname(gitRoot), `${path.basename(gitRoot)}.worktrees`);
+}
+
+function cleanupEmptyManagedWorktreeRoot(gitRoot: string, removedPath: string): void {
+  const managedRoot = getManagedWorktreeRoot(gitRoot);
+  const resolvedManagedRoot = path.resolve(managedRoot);
+  const resolvedRemovedPath = path.resolve(removedPath);
+
+  if (!resolvedRemovedPath.startsWith(`${resolvedManagedRoot}${path.sep}`)) {
+    return;
+  }
+
+  try {
+    if (readdirSync(managedRoot).length === 0) {
+      rmSync(managedRoot, { recursive: true, force: true });
+    }
+  } catch {
+    // Directory already missing or unreadable; nothing to do.
+  }
+}
+
+async function removeWorktreeEntry(gitRoot: string, entry: WorktreeEntry): Promise<void> {
+  await $`git worktree remove ${entry.path}`;
+  cleanupEmptyManagedWorktreeRoot(gitRoot, entry.path);
+  console.log(`✓ Removed worktree: ${entry.codeName}`);
+}
+
 export async function commandList(): Promise<void> {
   let entries: WorktreeEntry[];
   try {
@@ -338,6 +369,32 @@ export async function commandList(): Promise<void> {
     console.log(line);
   }
   console.log("\n  worktree checkout <code-name>");
+}
+
+export async function commandRemove(name: string): Promise<void> {
+  let gitRoot: string;
+  let entries: WorktreeEntry[];
+  try {
+    gitRoot = await getPrimaryGitRoot();
+    entries = await getCurrentWorktreeEntries();
+  } catch {
+    console.error("Error: not a git repository");
+    process.exit(1);
+  }
+
+  if (name === "root") {
+    console.error("Error: cannot remove root worktree");
+    process.exit(1);
+  }
+
+  const entry = entries.find((candidate) => candidate.codeName === name);
+
+  if (!entry) {
+    console.error(`Error: worktree '${name}' not found`);
+    process.exit(1);
+  }
+
+  await removeWorktreeEntry(gitRoot, entry);
 }
 
 export async function commandListPorcelain(): Promise<void> {
@@ -389,8 +446,10 @@ async function isWorktreeBranchPruned(branchName: string): Promise<boolean> {
 }
 
 export async function commandPrune(prompt: PromptFn = promptYesNo): Promise<void> {
+  let gitRoot: string;
   let entries: WorktreeEntry[];
   try {
+    gitRoot = await getPrimaryGitRoot();
     entries = (await getCurrentWorktreeEntries()).filter((entry) => !entry.isCurrent);
   } catch {
     console.error("Error: not a git repository");
@@ -418,8 +477,7 @@ export async function commandPrune(prompt: PromptFn = promptYesNo): Promise<void
       continue;
     }
 
-    await $`git worktree remove ${entry.path}`;
-    console.log(`✓ Removed worktree: ${entry.codeName}`);
+    await removeWorktreeEntry(gitRoot, entry);
   }
 
   if (!foundPrunedBranch) {
@@ -495,6 +553,18 @@ export function buildCli(argv = hideBin(process.argv)): Argv {
       }
     )
     .command({
+      command: "remove <name>",
+      describe: "remove a worktree and clean up an empty managed worktree directory",
+      builder: (command) =>
+        command.positional("name", {
+          type: "string",
+          describe: "Sanitized worktree name",
+        }),
+      handler: async (args) => {
+        await commandRemove(String(args.name));
+      },
+    })
+    .command({
       command: "switch <name>",
       aliases: ["checkout"],
       describe: "open a subshell in the worktree directory",
@@ -543,7 +613,7 @@ export async function getCliCompletions(args: string[]): Promise<string[]> {
 
   const command = tokens[0];
   const globalOptions = ["--version", "--help"];
-  const commands = ["add", "list", "prune", "switch", "checkout", "completion"];
+  const commands = ["add", "list", "prune", "remove", "switch", "checkout", "completion"];
   const shellChoices: SupportedShell[] = ["bash", "zsh"];
 
   if (current.startsWith("-")) {
@@ -554,7 +624,7 @@ export async function getCliCompletions(args: string[]): Promise<string[]> {
     return [...commands, ...globalOptions].filter((value) => value.startsWith(current));
   }
 
-  if ((command === "switch" || command === "checkout") && tokens.length <= 1) {
+  if ((command === "switch" || command === "checkout" || command === "remove") && tokens.length <= 1) {
     const worktreeNames = await getWorktreeNameCompletions(current);
     return [...globalOptions, ...worktreeNames].filter((value) => value.startsWith(current));
   }

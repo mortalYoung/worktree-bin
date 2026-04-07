@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   buildTargetPath,
+  commandRemove,
   commandPrune,
   detectShell,
   formatWorktreeList,
@@ -75,6 +76,32 @@ function createRepoWithWorktree(): { repoDir: string; worktreeDir: string } {
   runGit(repoDir, ["worktree", "add", "-b", "feature/foo", worktreeDir]);
 
   return { repoDir, worktreeDir };
+}
+
+function createRepoWithTwoWorktrees(): {
+  repoDir: string;
+  firstWorktreeDir: string;
+  secondWorktreeDir: string;
+} {
+  const baseDir = createTempDir("worktree-bin-two-");
+  const repoDir = path.join(baseDir, "sample-repo");
+  mkdirSync(repoDir, { recursive: true });
+
+  runGit(repoDir, ["init", "--initial-branch=main"]);
+  runGit(repoDir, ["config", "user.name", "Codex"]);
+  runGit(repoDir, ["config", "user.email", "codex@example.com"]);
+
+  writeFileSync(path.join(repoDir, "README.md"), "# sample\n");
+  runGit(repoDir, ["add", "README.md"]);
+  runGit(repoDir, ["commit", "-m", "init"]);
+
+  const worktreeRoot = path.join(baseDir, "sample-repo.worktrees");
+  const firstWorktreeDir = path.join(worktreeRoot, "feature-foo");
+  const secondWorktreeDir = path.join(worktreeRoot, "feature-bar");
+  runGit(repoDir, ["worktree", "add", "-b", "feature/foo", firstWorktreeDir]);
+  runGit(repoDir, ["worktree", "add", "-b", "feature/bar", secondWorktreeDir]);
+
+  return { repoDir, firstWorktreeDir, secondWorktreeDir };
 }
 
 function createRepoWithPrunableWorktree(): {
@@ -286,6 +313,9 @@ test("renderCompletionInstructions: prints friendly setup steps", () => {
 test("shouldCompleteWorktreeNames: only true for switch/checkout positional completion", () => {
   expect(shouldCompleteWorktreeNames({ _: ["worktree", "switch"] } as never)).toBe(true);
   expect(shouldCompleteWorktreeNames({ _: ["worktree", "checkout", "root"] } as never)).toBe(true);
+  expect(shouldCompleteWorktreeNames({ _: ["worktree", "remove", "feature-foo"] } as never)).toBe(
+    true
+  );
   expect(shouldCompleteWorktreeNames({ _: ["worktree", "list"] } as never)).toBe(false);
   expect(shouldCompleteWorktreeNames({ _: ["worktree", "switch", "root", "extra"] } as never)).toBe(
     false
@@ -297,6 +327,7 @@ test("CLI help: shows yargs-generated commands including completion", () => {
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("worktree prune");
+  expect(result.stdout).toContain("worktree remove <name>");
   expect(result.stdout).toContain("worktree completion [shell]");
   expect(result.stdout).toContain("[aliases: checkout]");
 });
@@ -363,6 +394,18 @@ test("dynamic completion: switch/checkout return worktree names in a git repo", 
   expect(checkoutResult.exitCode).toBe(0);
   expect(checkoutResult.stdout).toContain("root");
   expect(checkoutResult.stdout).toContain("feature-foo");
+});
+
+test("dynamic completion: remove returns worktree names in a git repo", () => {
+  const { repoDir } = createRepoWithWorktree();
+  const result = run(["--get-yargs-completions", "worktree", "remove", ""], {
+    cwd: repoDir,
+    env: { SHELL: "/bin/bash" },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("root");
+  expect(result.stdout).toContain("feature-foo");
 });
 
 test("dynamic completion: switch filters worktree names by the current prefix", () => {
@@ -446,4 +489,39 @@ test("commandPrune: removes non-root worktree when no same-named remote branch e
   }
 
   expect(existsSync(worktreeDir)).toBe(false);
+});
+
+test("commandRemove: removes the target worktree and cleans up the managed directory when empty", async () => {
+  const { repoDir, worktreeDir } = createRepoWithWorktree();
+  const previousCwd = process.cwd();
+  const managedRoot = path.dirname(worktreeDir);
+
+  process.chdir(repoDir);
+
+  try {
+    await commandRemove("feature-foo");
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  expect(existsSync(worktreeDir)).toBe(false);
+  expect(existsSync(managedRoot)).toBe(false);
+});
+
+test("commandRemove: preserves the managed directory when other worktrees remain", async () => {
+  const { repoDir, firstWorktreeDir, secondWorktreeDir } = createRepoWithTwoWorktrees();
+  const previousCwd = process.cwd();
+  const managedRoot = path.dirname(firstWorktreeDir);
+
+  process.chdir(repoDir);
+
+  try {
+    await commandRemove("feature-foo");
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  expect(existsSync(firstWorktreeDir)).toBe(false);
+  expect(existsSync(secondWorktreeDir)).toBe(true);
+  expect(existsSync(managedRoot)).toBe(true);
 });
