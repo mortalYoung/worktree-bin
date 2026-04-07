@@ -72,6 +72,22 @@ worktree list
 #   worktree checkout <code-name>
 ```
 
+### `worktree prune`
+
+Fetches remotes with `--prune`, then checks every non-`root` worktree.
+
+- If no same-named remote branch exists for a worktree branch, the CLI asks whether to delete that worktree.
+- `root` is never considered for deletion.
+
+**Example:**
+
+```bash
+worktree prune
+# ▶ Pruning remote-tracking branches
+# Branch 'feature/foo' for worktree 'feature-foo' is gone. Delete /Users/me/my-app.worktrees/feature-foo? [y/N]
+# ✓ Removed worktree: feature-foo
+```
+
 ### `worktree completion [shell]`
 
 Shows setup instructions for shell completion for `bash` or `zsh`.

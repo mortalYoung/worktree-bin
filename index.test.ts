@@ -1,9 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   buildTargetPath,
+  commandPrune,
   detectShell,
   formatWorktreeList,
   generateCodename,
@@ -74,6 +75,63 @@ function createRepoWithWorktree(): { repoDir: string; worktreeDir: string } {
   runGit(repoDir, ["worktree", "add", "-b", "feature/foo", worktreeDir]);
 
   return { repoDir, worktreeDir };
+}
+
+function createRepoWithPrunableWorktree(): {
+  repoDir: string;
+  remoteDir: string;
+  worktreeDir: string;
+} {
+  const baseDir = createTempDir("worktree-bin-prune-");
+  const remoteDir = path.join(baseDir, "remote.git");
+  const repoDir = path.join(baseDir, "sample-repo");
+  const worktreeDir = path.join(baseDir, "sample-repo.worktrees", "feature-foo");
+
+  runGit(baseDir, ["init", "--bare", remoteDir]);
+  runGit(baseDir, ["clone", remoteDir, repoDir]);
+  runGit(repoDir, ["config", "user.name", "Codex"]);
+  runGit(repoDir, ["config", "user.email", "codex@example.com"]);
+
+  writeFileSync(path.join(repoDir, "README.md"), "# sample\n");
+  runGit(repoDir, ["add", "README.md"]);
+  runGit(repoDir, ["commit", "-m", "init"]);
+  runGit(repoDir, ["push", "-u", "origin", "HEAD:main"]);
+
+  runGit(repoDir, ["checkout", "-b", "feature/foo"]);
+  writeFileSync(path.join(repoDir, "feature.txt"), "feature\n");
+  runGit(repoDir, ["add", "feature.txt"]);
+  runGit(repoDir, ["commit", "-m", "feature"]);
+  runGit(repoDir, ["push", "-u", "origin", "feature/foo"]);
+  runGit(repoDir, ["checkout", "main"]);
+  runGit(repoDir, ["worktree", "add", worktreeDir, "feature/foo"]);
+  runGit(repoDir, ["push", "origin", "--delete", "feature/foo"]);
+
+  return { repoDir, remoteDir, worktreeDir };
+}
+
+function createRepoWithLocalOnlyWorktree(): {
+  repoDir: string;
+  remoteDir: string;
+  worktreeDir: string;
+} {
+  const baseDir = createTempDir("worktree-bin-local-only-");
+  const remoteDir = path.join(baseDir, "remote.git");
+  const repoDir = path.join(baseDir, "sample-repo");
+  const worktreeDir = path.join(baseDir, "sample-repo.worktrees", "goose-radio");
+
+  runGit(baseDir, ["init", "--bare", remoteDir]);
+  runGit(baseDir, ["clone", remoteDir, repoDir]);
+  runGit(repoDir, ["config", "user.name", "Codex"]);
+  runGit(repoDir, ["config", "user.email", "codex@example.com"]);
+
+  writeFileSync(path.join(repoDir, "README.md"), "# sample\n");
+  runGit(repoDir, ["add", "README.md"]);
+  runGit(repoDir, ["commit", "-m", "init"]);
+  runGit(repoDir, ["push", "-u", "origin", "HEAD:main"]);
+
+  runGit(repoDir, ["worktree", "add", "-b", "goose-radio", worktreeDir]);
+
+  return { repoDir, remoteDir, worktreeDir };
 }
 
 afterAll(() => {
@@ -155,6 +213,33 @@ branch refs/heads/strip-away
   ]);
 });
 
+test("parseWorktreeList: non-root worktrees outside the conventional directory are not mislabeled as root", () => {
+  const output = `
+worktree /Users/user/my-project
+HEAD abc123
+branch refs/heads/main
+
+worktree /tmp/custom-feature
+HEAD def456
+branch refs/heads/feature/foo
+`;
+
+  expect(parseWorktreeList(output, "/Users/user/my-project", "my-project")).toEqual([
+    {
+      path: "/Users/user/my-project",
+      branchName: "main",
+      codeName: "root",
+      isCurrent: true,
+    },
+    {
+      path: "/tmp/custom-feature",
+      branchName: "feature/foo",
+      codeName: "custom-feature",
+      isCurrent: false,
+    },
+  ]);
+});
+
 test("formatWorktreeList: prints aligned table rows", () => {
   expect(
     formatWorktreeList([
@@ -211,8 +296,20 @@ test("CLI help: shows yargs-generated commands including completion", () => {
   const result = run(["--help"]);
 
   expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("worktree prune");
   expect(result.stdout).toContain("worktree completion [shell]");
   expect(result.stdout).toContain("[aliases: checkout]");
+});
+
+test("CLI list --porcelain: prints raw git worktree porcelain output", () => {
+  const { repoDir, worktreeDir } = createRepoWithWorktree();
+  const result = run(["list", "--porcelain"], { cwd: repoDir });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain(`/sample-repo\nHEAD `);
+  expect(result.stdout).toContain(`/sample-repo.worktrees/feature-foo\nHEAD `);
+  expect(result.stdout).toContain("branch refs/heads/main");
+  expect(result.stdout).toContain("branch refs/heads/feature/foo");
 });
 
 test("CLI invalid command: shows help and exits non-zero", () => {
@@ -304,4 +401,49 @@ test("dynamic completion: non-git directories fail gracefully with no worktree s
   expect(result.stderr).not.toContain("Error: not a git repository");
   expect(result.stdout).not.toContain("root");
   expect(result.stdout).not.toContain("feature-foo");
+});
+
+test("commandPrune: removes non-root worktree when its upstream branch is gone and user confirms", async () => {
+  const { repoDir, worktreeDir } = createRepoWithPrunableWorktree();
+  const previousCwd = process.cwd();
+
+  process.chdir(repoDir);
+
+  try {
+    await commandPrune(async () => true);
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  expect(existsSync(worktreeDir)).toBe(false);
+});
+
+test("commandPrune: keeps worktree when its upstream branch is gone and user declines", async () => {
+  const { repoDir, worktreeDir } = createRepoWithPrunableWorktree();
+  const previousCwd = process.cwd();
+
+  process.chdir(repoDir);
+
+  try {
+    await commandPrune(async () => false);
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  expect(existsSync(worktreeDir)).toBe(true);
+});
+
+test("commandPrune: removes non-root worktree when no same-named remote branch exists", async () => {
+  const { repoDir, worktreeDir } = createRepoWithLocalOnlyWorktree();
+  const previousCwd = process.cwd();
+
+  process.chdir(repoDir);
+
+  try {
+    await commandPrune(async () => true);
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  expect(existsSync(worktreeDir)).toBe(false);
 });

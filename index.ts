@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { $ } from "bun";
 import { generate } from "random-words";
 import yargs from "yargs";
@@ -80,6 +81,7 @@ export type WorktreeEntry = {
 };
 
 export type SupportedShell = "bash" | "zsh";
+export type PromptFn = (message: string) => Promise<boolean>;
 
 export function sanitizeBranchName(branch: string): string {
   return branch.replaceAll("/", "-");
@@ -103,7 +105,6 @@ export function parseWorktreeList(
   gitRoot: string,
   repoName: string
 ): WorktreeEntry[] {
-  const worktreeRoot = path.join(path.dirname(gitRoot), `${repoName}.worktrees`);
   const blocks = porcelainOutput
     .trim()
     .split("\n\n")
@@ -118,9 +119,7 @@ export function parseWorktreeList(
       ? branchRef.slice("refs/heads/".length)
       : "(detached)";
     const isCurrent = worktreePath === gitRoot;
-    const codeName = worktreePath.startsWith(`${worktreeRoot}${path.sep}`)
-      ? path.basename(worktreePath)
-      : "root";
+    const codeName = isCurrent ? "root" : path.basename(worktreePath);
 
     return {
       path: worktreePath,
@@ -206,22 +205,36 @@ async function getGitRoot(): Promise<string> {
   return result.trim();
 }
 
-async function getWorktreeEntries(gitRoot: string): Promise<WorktreeEntry[]> {
+async function getPrimaryGitRoot(): Promise<string> {
+  const result = await $`git rev-parse --path-format=absolute --git-common-dir`.text();
+  return path.dirname(result.trim());
+}
+
+async function getPorcelainWorktreeList(): Promise<string> {
+  return await $`git worktree list --porcelain`.text();
+}
+
+async function getWorktreeEntries(gitRoot: string, porcelain?: string): Promise<WorktreeEntry[]> {
   const repoName = path.basename(gitRoot);
-  const porcelain = await $`git worktree list --porcelain`.text();
-  return parseWorktreeList(porcelain, gitRoot, repoName);
+  const source = porcelain ?? (await getPorcelainWorktreeList());
+  return parseWorktreeList(source, gitRoot, repoName);
+}
+
+async function getCurrentWorktreeEntries(): Promise<WorktreeEntry[]> {
+  const gitRoot = await getPrimaryGitRoot();
+  const porcelain = await getPorcelainWorktreeList();
+  return getWorktreeEntries(gitRoot, porcelain);
 }
 
 export async function getWorktreeNameCompletions(current = ""): Promise<string[]> {
-  let gitRoot: string;
+  let entries: WorktreeEntry[];
 
   try {
-    gitRoot = await getGitRoot();
+    entries = await getCurrentWorktreeEntries();
   } catch {
     return [];
   }
 
-  const entries = await getWorktreeEntries(gitRoot);
   return entries
     .map((entry) => entry.codeName)
     .filter((name, index, names) => names.indexOf(name) === index)
@@ -312,21 +325,106 @@ export async function commandSwitch(name: string): Promise<void> {
 }
 
 export async function commandList(): Promise<void> {
-  let gitRoot: string;
+  let entries: WorktreeEntry[];
   try {
-    gitRoot = await getGitRoot();
+    entries = await getCurrentWorktreeEntries();
   } catch {
     console.error("Error: not a git repository");
     process.exit(1);
   }
-
-  const entries = await getWorktreeEntries(gitRoot);
 
   console.log("▶ Available worktrees");
   for (const line of formatWorktreeList(entries)) {
     console.log(line);
   }
   console.log("\n  worktree checkout <code-name>");
+}
+
+export async function commandListPorcelain(): Promise<void> {
+  try {
+    process.stdout.write(await getPorcelainWorktreeList());
+  } catch {
+    console.error("Error: not a git repository");
+    process.exit(1);
+  }
+}
+
+async function promptYesNo(message: string): Promise<boolean> {
+  const readline = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    while (true) {
+      const answer = (await readline.question(`${message} [y/N] `)).trim().toLowerCase();
+
+      if (answer === "" || answer === "n" || answer === "no") {
+        return false;
+      }
+
+      if (answer === "y" || answer === "yes") {
+        return true;
+      }
+    }
+  } finally {
+    readline.close();
+  }
+}
+
+async function isWorktreeBranchPruned(branchName: string): Promise<boolean> {
+  if (branchName === "(detached)") {
+    return false;
+  }
+
+  const remoteBranches = (
+    await $`git for-each-ref --format=${"%(refname:short)"} refs/remotes`.text()
+  )
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.endsWith("/HEAD"));
+
+  return !remoteBranches.some((remoteBranch) => remoteBranch.endsWith(`/${branchName}`));
+}
+
+export async function commandPrune(prompt: PromptFn = promptYesNo): Promise<void> {
+  let entries: WorktreeEntry[];
+  try {
+    entries = (await getCurrentWorktreeEntries()).filter((entry) => !entry.isCurrent);
+  } catch {
+    console.error("Error: not a git repository");
+    process.exit(1);
+  }
+
+  console.log("▶ Pruning remote-tracking branches");
+  await $`git fetch --all --prune`;
+
+  let foundPrunedBranch = false;
+
+  for (const entry of entries) {
+    if (!(await isWorktreeBranchPruned(entry.branchName))) {
+      continue;
+    }
+
+    foundPrunedBranch = true;
+
+    const shouldDelete = await prompt(
+      `Branch '${entry.branchName}' for worktree '${entry.codeName}' is gone. Delete ${entry.path}?`
+    );
+
+    if (!shouldDelete) {
+      console.log(`• Kept worktree: ${entry.codeName}`);
+      continue;
+    }
+
+    await $`git worktree remove ${entry.path}`;
+    console.log(`✓ Removed worktree: ${entry.codeName}`);
+  }
+
+  if (!foundPrunedBranch) {
+    console.log("✓ No pruned worktrees found");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +471,27 @@ export function buildCli(argv = hideBin(process.argv)): Argv {
     .command(
       "list",
       "list worktrees with branch names and code names",
+      (command) =>
+        command.option("porcelain", {
+          type: "boolean",
+          default: false,
+          describe: "Print raw porcelain output for scripting",
+        }),
+      async (args) => {
+        if (args.porcelain) {
+          await commandListPorcelain();
+          return;
+        }
+
+        await commandList();
+      }
+    )
+    .command(
+      "prune",
+      "prune non-root worktrees whose remote branches are missing",
       (command) => command,
       async () => {
-        await commandList();
+        await commandPrune();
       }
     )
     .command({
@@ -427,7 +543,7 @@ export async function getCliCompletions(args: string[]): Promise<string[]> {
 
   const command = tokens[0];
   const globalOptions = ["--version", "--help"];
-  const commands = ["add", "list", "switch", "checkout", "completion"];
+  const commands = ["add", "list", "prune", "switch", "checkout", "completion"];
   const shellChoices: SupportedShell[] = ["bash", "zsh"];
 
   if (current.startsWith("-")) {
