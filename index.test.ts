@@ -197,10 +197,10 @@ test("generateCodename: returns a string", () => {
 
 test("generateCodename: contains exactly one dash separating two non-empty words", () => {
   const name = generateCodename();
-  const parts = name.split("-");
-  expect(parts.length).toBe(2);
-  expect(parts[0].length).toBeGreaterThan(0);
-  expect(parts[1].length).toBeGreaterThan(0);
+  const [first = "", second = ""] = name.split("-");
+  expect(name.split("-").length).toBe(2);
+  expect(first.length).toBeGreaterThan(0);
+  expect(second.length).toBeGreaterThan(0);
 });
 
 test("parseWorktreeList: extracts branch names and code names", () => {

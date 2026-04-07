@@ -137,3 +137,17 @@ worktree completion zsh --script
 bun install   # install dependencies
 bun test      # run tests
 ```
+
+## Internal Structure
+
+The CLI is now organized around separation of concerns:
+
+```text
+src/
+├── cli/        # yargs setup and completion entry helpers
+├── commands/   # command flow orchestration and user-facing output
+├── domain/     # pure types and logic
+└── infra/      # git, filesystem, and prompt side effects
+```
+
+`index.ts` remains the Bun bin entrypoint and compatibility facade. It re-exports the public helpers used by the test suite while delegating implementation to `src/`.
