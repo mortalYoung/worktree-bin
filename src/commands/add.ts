@@ -1,3 +1,4 @@
+import { buildGeneratedBranchName } from "../domain/branchName";
 import path from "node:path";
 import { generateCodename } from "../domain/codename";
 import { buildTargetPath, sanitizeBranchName } from "../domain/worktree";
@@ -10,11 +11,14 @@ import {
 import { copyVscodeDirectory } from "../infra/fs";
 import { exitNotGitRepository } from "./shared";
 
-export async function commandAdd(branchName: string | undefined): Promise<void> {
+export async function commandAdd(
+  branchName: string | undefined,
+  options: { prefix?: string } = {}
+): Promise<void> {
   let name = branchName;
 
   if (!name) {
-    name = generateCodename();
+    name = buildGeneratedBranchName(options.prefix, generateCodename());
     console.log(`▶ No branch name provided. Using generated codename: ${name}`);
   }
 

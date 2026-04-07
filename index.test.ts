@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  buildGeneratedBranchName,
   buildTargetPath,
   commandRemove,
   commandPrune,
@@ -203,6 +204,11 @@ test("generateCodename: contains exactly one dash separating two non-empty words
   expect(second.length).toBeGreaterThan(0);
 });
 
+test("buildGeneratedBranchName: prepends prefix to generated codename", () => {
+  expect(buildGeneratedBranchName("fix/", "strip-away")).toBe("fix/strip-away");
+  expect(buildGeneratedBranchName(undefined, "strip-away")).toBe("strip-away");
+});
+
 test("parseWorktreeList: extracts branch names and code names", () => {
   const output = `
 worktree /Users/user/my-project
@@ -375,6 +381,33 @@ test("CLI completion command: prints raw script with --script", () => {
   expect(bash.stdout).toContain("complete -o bashdefault -o default");
 });
 
+test("CLI add --prefix: prefixes generated branch names when branchName is omitted", () => {
+  const baseDir = createTempDir("worktree-bin-prefix-");
+  const repoDir = path.join(baseDir, "sample-repo");
+  mkdirSync(repoDir, { recursive: true });
+
+  runGit(repoDir, ["init", "--initial-branch=main"]);
+  runGit(repoDir, ["config", "user.name", "Codex"]);
+  runGit(repoDir, ["config", "user.email", "codex@example.com"]);
+
+  writeFileSync(path.join(repoDir, "README.md"), "# sample\n");
+  runGit(repoDir, ["add", "README.md"]);
+  runGit(repoDir, ["commit", "-m", "init"]);
+
+  const result = run(["add", "--prefix", "fix/"], { cwd: repoDir });
+  const porcelain = Bun.spawnSync(["git", "worktree", "list", "--porcelain"], {
+    cwd: repoDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const porcelainOutput = porcelain.stdout.toString();
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("▶ No branch name provided. Using generated codename: fix/");
+  expect(porcelainOutput).toMatch(/branch refs\/heads\/fix\/[a-z-]+\n/);
+  expect(porcelainOutput).toMatch(/worktree .*sample-repo\.worktrees\/fix-[a-z-]+\nHEAD /);
+});
+
 test("dynamic completion: switch/checkout return worktree names in a git repo", () => {
   const { repoDir } = createRepoWithWorktree();
 
@@ -406,6 +439,20 @@ test("dynamic completion: remove returns worktree names in a git repo", () => {
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("root");
   expect(result.stdout).toContain("feature-foo");
+});
+
+test("dynamic completion: add returns the --prefix option", () => {
+  const result = run(["--get-yargs-completions", "worktree", "add", "--pr"]);
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("--prefix");
+});
+
+test("dynamic completion: completion returns the --script option", () => {
+  const result = run(["--get-yargs-completions", "worktree", "completion", "--sc"]);
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("--script");
 });
 
 test("dynamic completion: switch filters worktree names by the current prefix", () => {

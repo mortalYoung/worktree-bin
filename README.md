@@ -16,6 +16,7 @@ bun link
 Creates a worktree at `../<repo-name>.worktrees/<branchName>` relative to the repository root.
 
 - If `branchName` is omitted, a random 2-word codename is generated (e.g. `strip-away`).
+- `--prefix <value>` prepends a prefix to generated branch names when `branchName` is omitted (e.g. `--prefix fix/` produces `fix/strip-away`).
 - Branch names with slashes (e.g. `feature/foo`) are normalized to dashes in the directory name (`feature-foo`), while the actual branch name remains unchanged.
 - If a `.vscode` directory exists in the repository root, it is copied into the new worktree automatically.
 
@@ -35,6 +36,13 @@ worktree add
 # ✓ Worktree ready
 #
 #   worktree switch strip-away
+
+worktree add --prefix fix/
+# ▶ No branch name provided. Using generated codename: fix/strip-away
+# ▶ Creating worktree: fix-strip-away
+# ✓ Worktree ready
+#
+#   worktree switch fix-strip-away
 ```
 
 ### `worktree switch <name>` / `worktree checkout <name>`

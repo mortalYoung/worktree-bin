@@ -2,6 +2,12 @@ import path from "node:path";
 import { getCurrentWorktreeEntries } from "../infra/git";
 
 const CLI_NAME = "worktree";
+const GLOBAL_OPTIONS = ["--version", "--help"];
+const COMMANDS = ["add", "list", "prune", "remove", "switch", "checkout", "completion"];
+const ADD_OPTIONS = ["--prefix"];
+const LIST_OPTIONS = ["--porcelain"];
+const COMPLETION_OPTIONS = ["--script"];
+const SHELL_CHOICES = ["bash", "zsh"];
 
 export async function getWorktreeNameCompletions(current = ""): Promise<string[]> {
   try {
@@ -25,26 +31,37 @@ export async function getCliCompletions(args: string[]): Promise<string[]> {
       : completionArgs;
 
   const command = tokens[0];
-  const globalOptions = ["--version", "--help"];
-  const commands = ["add", "list", "prune", "remove", "switch", "checkout", "completion"];
-  const shellChoices = ["bash", "zsh"];
 
   if (current.startsWith("-")) {
-    return globalOptions.filter((option) => option.startsWith(current));
+    if (command === "add") {
+      return [...GLOBAL_OPTIONS, ...ADD_OPTIONS].filter((option) => option.startsWith(current));
+    }
+
+    if (command === "list") {
+      return [...GLOBAL_OPTIONS, ...LIST_OPTIONS].filter((option) => option.startsWith(current));
+    }
+
+    if (command === "completion") {
+      return [...GLOBAL_OPTIONS, ...COMPLETION_OPTIONS].filter((option) =>
+        option.startsWith(current)
+      );
+    }
+
+    return GLOBAL_OPTIONS.filter((option) => option.startsWith(current));
   }
 
   if (!command) {
-    return [...commands, ...globalOptions].filter((value) => value.startsWith(current));
+    return [...COMMANDS, ...GLOBAL_OPTIONS].filter((value) => value.startsWith(current));
   }
 
   if ((command === "switch" || command === "checkout" || command === "remove") && tokens.length <= 1) {
     const worktreeNames = await getWorktreeNameCompletions(current);
-    return [...globalOptions, ...worktreeNames].filter((value) => value.startsWith(current));
+    return [...GLOBAL_OPTIONS, ...worktreeNames].filter((value) => value.startsWith(current));
   }
 
   if (command === "completion" && tokens.length <= 1) {
-    return [...globalOptions, ...shellChoices].filter((value) => value.startsWith(current));
+    return [...GLOBAL_OPTIONS, ...SHELL_CHOICES].filter((value) => value.startsWith(current));
   }
 
-  return globalOptions.filter((option) => option.startsWith(current));
+  return GLOBAL_OPTIONS.filter((option) => option.startsWith(current));
 }

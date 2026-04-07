@@ -3,6 +3,7 @@ import { hideBin } from "yargs/helpers";
 import type { ArgumentsCamelCase, Argv } from "yargs";
 import { shouldCompleteWorktreeNames } from "../domain/completion";
 import type { SupportedShell } from "../domain/types";
+import { buildGeneratedBranchName } from "../domain/branchName";
 import { commandAdd } from "../commands/add";
 import { commandCompletion } from "../commands/completion";
 import { commandList, commandListPorcelain } from "../commands/list";
@@ -52,12 +53,19 @@ export function buildCli(argv = hideBin(process.argv)): Argv {
       "add [branchName]",
       "create a new worktree (generates codename if omitted)",
       (command) =>
-        command.positional("branchName", {
-          type: "string",
-          describe: "Branch name to create or reuse for the worktree",
-        }),
+        command
+          .positional("branchName", {
+            type: "string",
+            describe: "Branch name to create or reuse for the worktree",
+          })
+          .option("prefix", {
+            type: "string",
+            describe: "Prefix to prepend to generated branch names when branchName is omitted",
+          }),
       async (args) => {
-        await commandAdd(args.branchName as string | undefined);
+        await commandAdd(args.branchName as string | undefined, {
+          prefix: args.branchName ? undefined : (args.prefix as string | undefined),
+        });
       }
     )
     .command(

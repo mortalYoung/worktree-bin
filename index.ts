@@ -6,6 +6,7 @@ import { getCliCompletions } from "./src/cli/completion";
 export type { WorktreeEntry, SupportedShell, PromptFn } from "./src/domain/types";
 
 export { generateCodename } from "./src/domain/codename";
+export { buildGeneratedBranchName } from "./src/domain/branchName";
 export {
   detectShell,
   renderCompletionInstructions,
