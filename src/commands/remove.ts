@@ -3,13 +3,13 @@ import { getCurrentWorktreeEntries, getPrimaryGitRoot, removeGitWorktree } from 
 import type { WorktreeEntry } from "../domain/types";
 import { exitNotGitRepository } from "./shared";
 
-async function removeWorktreeEntry(gitRoot: string, entry: WorktreeEntry): Promise<void> {
-  await removeGitWorktree(entry.path);
+async function removeWorktreeEntry(gitRoot: string, entry: WorktreeEntry, force = false): Promise<void> {
+  await removeGitWorktree(entry.path, force);
   cleanupEmptyManagedWorktreeRoot(gitRoot, entry.path);
   console.log(`✓ Removed worktree: ${entry.codeName}`);
 }
 
-export async function commandRemove(name: string): Promise<void> {
+export async function commandRemove(name: string, force = false): Promise<void> {
   let gitRoot: string;
   let entries: WorktreeEntry[];
   try {
@@ -31,7 +31,7 @@ export async function commandRemove(name: string): Promise<void> {
     process.exit(1);
   }
 
-  await removeWorktreeEntry(gitRoot, entry);
+  await removeWorktreeEntry(gitRoot, entry, force);
 }
 
 export { removeWorktreeEntry };

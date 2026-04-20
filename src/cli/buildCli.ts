@@ -98,12 +98,19 @@ export function buildCli(argv = hideBin(process.argv)): Argv {
       command: "remove <name>",
       describe: "remove a worktree and clean up an empty managed worktree directory",
       builder: (command) =>
-        command.positional("name", {
-          type: "string",
-          describe: "Sanitized worktree name",
-        }),
+        command
+          .positional("name", {
+            type: "string",
+            describe: "Sanitized worktree name",
+          })
+          .option("force", {
+            alias: "f",
+            type: "boolean",
+            describe: "Force removal even if worktree has uncommitted changes",
+            default: false,
+          }),
       handler: async (args) => {
-        await commandRemove(String(args.name));
+        await commandRemove(String(args.name), Boolean(args.force));
       },
     })
     .command({

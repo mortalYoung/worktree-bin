@@ -55,8 +55,12 @@ export async function addNewBranchWorktree(
   await $`git worktree add -b ${branchName} ${targetPath}`;
 }
 
-export async function removeGitWorktree(worktreePath: string): Promise<void> {
-  await $`git worktree remove ${worktreePath}`;
+export async function removeGitWorktree(worktreePath: string, force = false): Promise<void> {
+  if (force) {
+    await $`git worktree remove --force ${worktreePath}`;
+  } else {
+    await $`git worktree remove ${worktreePath}`;
+  }
 }
 
 export async function fetchAllPrune(): Promise<void> {
