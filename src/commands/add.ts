@@ -8,7 +8,7 @@ import {
   doesLocalBranchExist,
   getGitRoot,
 } from "../infra/git";
-import { copyVscodeDirectory } from "../infra/fs";
+import { copyConfigDirectories } from "../infra/fs";
 import { exitNotGitRepository } from "./shared";
 
 export async function commandAdd(
@@ -41,7 +41,7 @@ export async function commandAdd(
     await addNewBranchWorktree(targetPath, name);
   }
 
-  await copyVscodeDirectory(gitRoot, targetPath);
+  await copyConfigDirectories(gitRoot, targetPath);
 
   console.log("✓ Worktree ready");
   console.log(`\n  worktree switch ${safeName}\n`);
